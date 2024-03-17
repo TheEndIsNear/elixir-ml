@@ -197,7 +197,7 @@ Axon.Display.as_graph(cnn_model, template)
 ```elixir
 cnn_trained_model_state =
   cnn_model
-  |> Axon.Loop.trainer(:binary_cross_entropy, Polaris.Optimizers.adam(1.0e-3))
+  |> Axon.Loop.trainer(:binary_cross_entropy, :adam)
   |> Axon.Loop.metric(:accuracy)
   |> Axon.Loop.validate(cnn_model, val_pipeline)
   |> Axon.Loop.early_stop("validation_loss", mode: :min)
