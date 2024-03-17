@@ -2,13 +2,22 @@
 
 ```elixir
 Mix.install([
-  {:axon, "~> 0.5"},
+  {:axon, "~> 0.6"},
   {:nx, "~> 0.5"},
-  {:exla, "~> 0.5"},
+  {:exla, "~> 0.6"},
   {:stb_image, "~> 0.6"},
-  {:kino, "~> 0.8"},
-  {:table_rex, "~> 3.1.1"}
+  {:kino, "~> 0.12.3"},
+  {:polaris, "~> 0.1"}
 ])
+
+Application.put_env(
+  :exla,
+  :clients,
+  cuda: [
+    platforms: :cuda,
+    lazy_transformers: :never
+  ]
+)
 
 Nx.global_default_backend(EXLA.Backend)
 ```
@@ -128,7 +137,7 @@ mlp_trained_model_state =
   |> Axon.Loop.metric(:accuracy)
   |> Axon.Loop.validate(mlp_model, val_pipeline)
   |> Axon.Loop.early_stop("validation_loss", mode: :min)
-  |> Axon.Loop.run(train_pipeline, %{}, epochs: 5, compiler: EXLA)
+  |> Axon.Loop.run(train_pipeline, %{}, epochs: 100, compiler: EXLA)
 ```
 
 ```elixir
@@ -197,7 +206,7 @@ Axon.Display.as_graph(cnn_model, template)
 ```elixir
 cnn_trained_model_state =
   cnn_model
-  |> Axon.Loop.trainer(:binary_cross_entropy, :adam)
+  |> Axon.Loop.trainer(:binary_cross_entropy, Polaris.Optimizers.adam(1.0e3))
   |> Axon.Loop.metric(:accuracy)
   |> Axon.Loop.validate(cnn_model, val_pipeline)
   |> Axon.Loop.early_stop("validation_loss", mode: :min)
