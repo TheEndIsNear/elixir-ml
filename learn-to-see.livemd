@@ -9,7 +9,11 @@ Mix.install([
   {:kino, "~> 0.12.3"},
   {:polaris, "~> 0.1"}
 ])
+```
 
+## Neural Networks
+
+```elixir
 Application.put_env(
   :exla,
   :clients,
@@ -20,9 +24,8 @@ Application.put_env(
 )
 
 Nx.global_default_backend(EXLA.Backend)
+Nx.Defn.default_options(compiler: EXLA)
 ```
-
-## Neural Networks
 
 ```elixir
 defmodule CatsAndDogs do
