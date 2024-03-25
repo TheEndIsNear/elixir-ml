@@ -122,6 +122,8 @@ test_pipeline =
 Enum.take(train_pipeline, 1)
 ```
 
+<!-- livebook:{"branch_parent_index":0} -->
+
 ## MLP Training
 
 ```elixir
@@ -150,7 +152,7 @@ mlp_model
 |> Axon.Loop.run(test_pipeline, mlp_trained_model_state, compiler: EXLA)
 ```
 
-<!-- livebook:{"branch_parent_index":1} -->
+<!-- livebook:{"branch_parent_index":0} -->
 
 ## CNN Training
 
@@ -209,7 +211,7 @@ Axon.Display.as_graph(cnn_model, template)
 ```elixir
 cnn_trained_model_state =
   cnn_model
-  |> Axon.Loop.trainer(:binary_cross_entropy, Polaris.Optimizers.adam(1.0e3))
+  |> Axon.Loop.trainer(:binary_cross_entropy, Polaris.Optimizers.adam(learning_rate: 1.0e3))
   |> Axon.Loop.metric(:accuracy)
   |> Axon.Loop.validate(cnn_model, val_pipeline)
   |> Axon.Loop.early_stop("validation_loss", mode: :min)
