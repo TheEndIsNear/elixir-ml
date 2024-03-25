@@ -3,3 +3,4 @@ result
 .direnv/
 train/
 mobilenetv2-7*
+resnet/
