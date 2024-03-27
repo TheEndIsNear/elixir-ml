@@ -4,3 +4,5 @@ result
 train/
 mobilenetv2-7*
 resnet/
+resnet2/
+*.onnx
