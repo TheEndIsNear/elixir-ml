@@ -1,0 +1,241 @@
+# Understanding Text
+
+```elixir
+Mix.install([
+  {:scidata, "~> 0.1"},
+  {:axon, "~> 0.5"},
+  {:exla, "~> 0.6"},
+  {:nx, "~> 0.6"},
+  {:table_rex, "~> 3.1.1"},
+  {:kino, "~> 0.7"}
+])
+
+Nx.default_backend(EXLA.Backend)
+```
+
+## Fetching the Data
+
+```elixir
+Application.put_env(
+  :exla,
+  :clients,
+  cuda: [
+    platforms: :cuda,
+    lazy_transformers: :never
+  ]
+)
+
+Nx.global_default_backend(EXLA.Backend)
+Nx.Defn.default_options(compiler: EXLA)
+```
+
+```elixir
+data = Scidata.IMDBReviews.download()
+
+{train_data, test_data} =
+  data.review
+  |> Enum.zip(data.sentiment)
+  |> Enum.shuffle()
+  |> Enum.split(23_000)
+```
+
+## Tokenization and Vectorization
+
+```elixir
+frequencies =
+  Enum.reduce(train_data, %{}, fn {review, _}, tokens ->
+    review
+    |> String.downcase()
+    |> String.replace(~r/[\p{P}\p{S}]/, "")
+    |> String.split()
+    |> Enum.reduce(tokens, &Map.update(&2, &1, 1, fn x -> x + 1 end))
+  end)
+```
+
+```elixir
+num_tokens = 1024
+
+tokens =
+  frequencies
+  |> Enum.sort_by(&elem(&1, 1), :desc)
+  |> Enum.take(num_tokens)
+  |> Enum.with_index(fn {token, _}, i -> {token, i + 2} end)
+  |> Map.new()
+```
+
+```elixir
+review = "The Departed is Martin Scorsee's best work, and anybody 
+who disagrees is wrong. This movie is amazing."
+
+pad_token = 0
+unknown_token = 1
+max_seq_len = 64
+
+tokenize = fn review ->
+  review
+  |> String.downcase()
+  |> String.replace(~r/[\p{P}\p{S}]/, "")
+  |> String.split()
+  |> Enum.map(&Map.get(tokens, &1, unknown_token))
+  |> Nx.tensor()
+  |> then(&Nx.pad(&1, pad_token, [{0, max_seq_len - Nx.size(&1), 0}]))
+end
+
+tokenize.(review)
+```
+
+## Train a Model
+
+```elixir
+batch_size = 64
+
+train_pipeline =
+  train_data
+  |> Stream.map(fn {review, label} ->
+    {tokenize.(review), Nx.tensor(label)}
+  end)
+  |> Stream.chunk_every(batch_size, batch_size, :discard)
+  |> Stream.map(fn reviews_and_labels ->
+    {review, label} = Enum.unzip(reviews_and_labels)
+    {Nx.stack(review), Nx.stack(label) |> Nx.new_axis(-1)}
+  end)
+
+test_pipeline =
+  test_data
+  |> Stream.map(fn {review, label} ->
+    {tokenize.(review), Nx.tensor(label)}
+  end)
+  |> Stream.chunk_every(batch_size, batch_size, :discard)
+  |> Stream.map(fn reviews_and_labels ->
+    {review, label} = Enum.unzip(reviews_and_labels)
+    {Nx.stack(review), Nx.stack(label) |> Nx.new_axis(-1)}
+  end)
+
+Enum.take(train_pipeline, 1)
+```
+
+## Training an MLP
+
+```elixir
+model =
+  Axon.input("review")
+  |> Axon.embedding(num_tokens + 2, 64)
+  |> Axon.flatten()
+  |> Axon.dense(64, activation: :relu)
+  |> Axon.dense(1)
+```
+
+```elixir
+input_template = Nx.template({64, 64}, :s64)
+Axon.Display.as_graph(model, input_template)
+```
+
+```elixir
+loss =
+  &Axon.Losses.binary_cross_entropy(&1, &2,
+    from_logits: true,
+    reduction: :mean
+  )
+
+optimizer = Polaris.Optimizers.adam(learning_rate: 1.0e-4)
+
+trained_model_state =
+  model
+  |> Axon.Loop.trainer(loss, optimizer)
+  |> Axon.Loop.metric(:accuracy)
+  |> Axon.Loop.run(train_pipeline, %{}, epochs: 10, compiler: EXLA)
+```
+
+```elixir
+model
+|> Axon.Loop.evaluator()
+|> Axon.Loop.metric(:accuracy)
+|> Axon.Loop.run(test_pipeline, trained_model_state, compiler: EXLA)
+```
+
+## Intro to RNN
+
+```elixir
+sequence = Axon.input("review")
+
+embedded = sequence |> Axon.embedding(num_tokens + 2, 64)
+
+mask = Axon.mask(sequence, 0)
+```
+
+```elixir
+{rnn_sequence, _state} = Axon.lstm(embedded, 64, mask: mask, unroll: :static)
+```
+
+```elixir
+final_token =
+  Axon.nx(rnn_sequence, fn seq ->
+    Nx.squeeze(seq[[0..-1//1, -1, 0..-1//1]])
+  end)
+```
+
+```elixir
+model =
+  final_token
+  |> Axon.dense(74, activation: :relu)
+  |> Axon.dense(1)
+
+Axon.Display.as_graph(model, input_template)
+```
+
+```elixir
+trained_model_state =
+  model
+  |> Axon.Loop.trainer(loss, optimizer)
+  |> Axon.Loop.metric(:accuracy)
+  |> Axon.Loop.run(train_pipeline, %{}, epochs: 10, compiler: EXLA)
+```
+
+```elixir
+model
+|> Axon.Loop.evaluator()
+|> Axon.Loop.metric(:accuracy)
+|> Axon.Loop.run(test_pipeline, trained_model_state, compiler: EXLA)
+```
+
+## Bidirectional RNN
+
+```elixir
+sequence = Axon.input("review")
+mask = Axon.mask(sequence, 0)
+embedded = Axon.embedding(sequence, num_tokens + 2, 64)
+
+{rnn_sequence, _state} =
+  Axon.bidirectional(
+    embedded,
+    &Axon.lstm(&1, 64, mask: mask, unroll: :static),
+    &Axon.concatenate/2
+  )
+
+final_token =
+  Axon.nx(rnn_sequence, fn seq ->
+    Nx.squeeze(seq[[0..-1//1, -1, 0..-1//1]])
+  end)
+
+moel =
+  final_token
+  |> Axon.dense(64, activation: :relu)
+  |> Axon.dense(1)
+
+Axon.Display.as_graph(model, input_template)
+```
+
+```elixir
+trained_model_state =
+  model
+  |> Axon.Loop.trainer(loss, optimizer)
+  |> Axon.Loop.metric(:accuracy)
+  |> Axon.Loop.run(train_pipeline, %{}, epochs: 10, compiler: EXLA)
+```
+
+```elixir
+model
+|> Axon.Loop.evaluator()
+|> Axon.Loop.metric(:accuracy)
+|> Axon.Loop.run(test_pipeline, trained_model_state, compiler: EXLA)
+```
